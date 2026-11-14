@@ -337,8 +337,13 @@ impl Reader<'_> {
                 levels[i] = self.level(l, i);
                 explicit_levels[i] = true;
             }
-            if let Some(link) = a.child_val("w:numStyleLink") {
-                links.push((id, link.to_string()));
+            // A list style's own definition (`w:styleLink`), or a list that uses one
+            // (`w:numStyleLink`): both links are kept, under the style's id in the model, so a
+            // save writes them back and the style keeps driving its lists.
+            let style_link = a.child_val("w:styleLink").map(|s| self.pc.style_id(s));
+            let num_style_link = a.child_val("w:numStyleLink").map(|s| self.pc.style_id(s));
+            if let Some(link) = &num_style_link {
+                links.push((id, link.clone()));
             }
             let hex = |v: &str| v.len() == 8 && v.bytes().all(|b| b.is_ascii_hexdigit());
             abstracts.push(AbstractNum {
@@ -353,6 +358,8 @@ impl Reader<'_> {
                     // `multilevel` is what the writer derives for the nine levels read here.
                     .filter(|v| matches!(*v, "singleLevel" | "hybridMultilevel"))
                     .map(str::to_string),
+                style_link,
+                num_style_link,
             });
         }
         let mut nums = Vec::new();
@@ -375,10 +382,15 @@ impl Reader<'_> {
             }
             nums.push(Num { id, abstract_id: abs, start_overrides, level_overrides });
         }
-        // Abstracts that only link to a numbering style take that style's list levels.
+        // Abstracts that only link to a numbering style take that style's list levels: those of
+        // the style's own definition (`w:styleLink`), else of the list the style's paragraph
+        // properties name. One hop only, and `src != aid` drops a self-link, so a file whose
+        // `w:styleLink` / `w:numStyleLink` point in a circle copies levels once and stops
+        // instead of chasing the chain for ever.
         for (aid, style) in links {
-            let num = self.doc.styles.get(&self.pc.style_id(&style)).and_then(|s| s.para.numbering).map(|n| n.num);
-            let src = num.and_then(|n| nums.iter().find(|x: &&Num| x.id == n)).map(|x| x.abstract_id);
+            let defined = abstracts.iter().find(|a: &&AbstractNum| a.style_link.as_deref() == Some(style.as_str())).map(|a| a.id);
+            let num = self.doc.styles.get(&style).and_then(|s| s.para.numbering).map(|n| n.num);
+            let src = defined.or_else(|| num.and_then(|n| nums.iter().find(|x: &&Num| x.id == n)).map(|x| x.abstract_id));
             let source = src
                 .filter(|s| *s != aid)
                 .and_then(|s| abstracts.iter().find(|a: &&AbstractNum| a.id == s))

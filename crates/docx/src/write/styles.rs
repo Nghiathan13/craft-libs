@@ -232,6 +232,16 @@ pub(super) fn numbering_xml(doc: &Document) -> Vec<u8> {
         if let Some(n) = &a.name {
             w.val("w:name", n);
         }
+        // …styleLink, numStyleLink, then the levels (CT_AbstractNum order). A link is written
+        // only to a numbering style the document still has, because Word treats a link to a
+        // missing style, or to one of another kind, as a broken list and drops the numbering.
+        // `w:styleLink` wins: the schema allows only one of the two on a definition.
+        let list_style = |s: &Option<String>| s.clone().filter(|s| doc.styles.get(s).is_some_and(|st| st.kind == StyleKind::Numbering));
+        if let Some(s) = list_style(&a.style_link) {
+            w.val("w:styleLink", &s);
+        } else if let Some(s) = list_style(&a.num_style_link) {
+            w.val("w:numStyleLink", &s);
+        }
         for (i, l) in a.levels.iter().take(9).enumerate() {
             write_level(&mut w, i, l);
         }

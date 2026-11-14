@@ -3723,6 +3723,72 @@ fn a_list_level_without_a_list_takes_the_style_s_list() {
     assert_eq!(again.styles.get("Heading3").and_then(|s| s.para.numbering).map(|n| (n.num, n.level)), Some((15, 2)));
 }
 
+/// A list style (a `numbering` style) stays linked to its lists: the definition carrying
+/// `w:styleLink` lends its levels to every list that names the style with `w:numStyleLink`, and
+/// both links are written back, so changing the style still changes its lists after a save.
+/// WordCraft read the levels and dropped the links, so a saved list style drove nothing
+/// (storytold/wordcraft#3805, the `w:styleLink` row of storytold/wordcraft#1034).
+#[test]
+fn a_list_style_keeps_the_links_between_it_and_its_lists() {
+    // As Word writes it: abstract 0 is the style's definition (`w:styleLink`), abstract 1 is a
+    // list that uses the style (`w:numStyleLink`) and carries no levels of its own. The style's
+    // own paragraph properties name no list, so only `w:styleLink` can find the levels.
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+        <w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style>
+        <w:style w:type="numbering" w:customStyle="1" w:styleId="MyList"><w:name w:val="My List"/><w:uiPriority w:val="99"/></w:style>
+        </w:styles>"#
+    );
+    let numbering = format!(
+        r#"<w:numbering {W_NS}>
+        <w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="multilevel"/><w:styleLink w:val="MyList"/>
+        <w:lvl w:ilvl="0"><w:start w:val="4"/><w:numFmt w:val="upperLetter"/><w:lvlText w:val="%1)"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>
+        <w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="multilevel"/><w:numStyleLink w:val="MyList"/></w:abstractNum>
+        <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+        <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
+        </w:numbering>"#
+    );
+    let body = r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>first</w:t></w:r></w:p>"#;
+    let parts = [("word/styles.xml", styles.as_str()), ("word/numbering.xml", numbering.as_str())];
+    let doc_rels = [("rId1", "styles", "styles.xml"), ("rId2", "numbering", "numbering.xml")];
+    let links = |d: &Document| -> Vec<(u32, Option<String>, Option<String>)> {
+        d.numbering.abstracts.iter().map(|a| (a.id, a.style_link.clone(), a.num_style_link.clone())).collect()
+    };
+    let d = craft_docx::read(&docx(body, &doc_rels, &parts)).unwrap();
+    assert_eq!(
+        links(&d),
+        [(0, Some("MyList".to_string()), None), (1, None, Some("MyList".to_string()))],
+        "the style's definition and the list that uses it each keep their link"
+    );
+    // The linked list is numbered by the style's levels, not the built-in default.
+    let lv = d.numbering.level(2, 0).unwrap();
+    assert_eq!((lv.start, lv.text.as_str(), lv.format), (4, "%1)", craft_wordmodel::section::NumFormat::UpperLetter));
+
+    let saved = craft_docx::write(&d).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/numbering.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:styleLink w:val="MyList"/>"#), "the definition is written back as the style's: {xml}");
+    assert!(xml.contains(r#"<w:numStyleLink w:val="MyList"/>"#), "the list still names the style: {xml}");
+    let again = craft_docx::read(&saved).unwrap();
+    assert_eq!(links(&again), links(&d), "both links survive save and reopen");
+    let lv = again.numbering.level(2, 0).unwrap();
+    assert_eq!((lv.start, lv.text.as_str()), (4, "%1)"), "and the list still takes the style's levels");
+
+    // A link to a style the document does not have, or to one of another kind, is not written:
+    // Word drops the whole list when it meets one.
+    let mut broken = d.clone();
+    for a in std::sync::Arc::make_mut(&mut broken.numbering).abstracts.iter_mut() {
+        a.style_link = a.style_link.as_ref().map(|_| "Missing".to_string());
+        a.num_style_link = a.num_style_link.as_ref().map(|_| "Normal".to_string());
+    }
+    let saved = craft_docx::write(&broken).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/numbering.xml").unwrap(), &mut xml).unwrap();
+    assert!(!xml.contains("w:styleLink") && !xml.contains("w:numStyleLink"), "neither link is written: {xml}");
+}
+
 /// `w:hideMark` on a cell is read and written back (it was dropped, and the empty rows NIH's
 /// tables collapse with it showed as blank lines).
 #[test]

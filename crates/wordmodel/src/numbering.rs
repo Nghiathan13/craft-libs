@@ -93,6 +93,14 @@ pub struct AbstractNum {
     /// `None`: derived from the levels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_level_type: Option<String>,
+    /// The list style (a numbering style's id) this definition belongs to (`w:styleLink`):
+    /// changing the style changes these levels, and every list that links to the style.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style_link: Option<String>,
+    /// The list style (a numbering style's id) whose definition this list uses
+    /// (`w:numStyleLink`): its levels are a copy of the style's definition's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_style_link: Option<String>,
 }
 
 // Explicit source-level presence is reader provenance used to distinguish an omitted Word level
@@ -106,6 +114,8 @@ impl PartialEq for AbstractNum {
             && self.nsid == other.nsid
             && self.tmpl == other.tmpl
             && self.multi_level_type == other.multi_level_type
+            && self.style_link == other.style_link
+            && self.num_style_link == other.num_style_link
     }
 }
 
